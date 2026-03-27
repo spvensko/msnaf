@@ -107,6 +107,19 @@ def subset_controls(add_control: dict | None, tested_junctions: set[str], filter
     return subsetted
 
 
+def ann_data_row_means_exact(control: ad.AnnData, target_index: pd.Index, chunk_size: int = 1024) -> dict[str, float]:
+    target_set = set(target_index)
+    selected = [(position, obs_name) for position, obs_name in enumerate(control.obs_names) if obs_name in target_set]
+    means = {}
+    for start in range(0, len(selected), chunk_size):
+        chunk = selected[start : start + chunk_size]
+        positions = [position for position, _ in chunk]
+        names = [name for _, name in chunk]
+        values = np.asarray(control[positions, :].X.mean(axis=1)).reshape(-1)
+        means.update({name: float(value) for name, value in zip(names, values)})
+    return means
+
+
 def export_peptides(
     counts_path: str,
     refs_dir: str,
@@ -167,14 +180,14 @@ def export_peptides(
             columns=["uid", "coord", "peptide", "coding_sequence", "peptide_context"],
         )
         if result.shape[0] != 0:
-            result = result.drop_duplicates().sort_values(["uid", "peptide", "coding_sequence"])
+            result = result.drop_duplicates()
         output_dir = os.path.dirname(os.path.abspath(output_path))
         if output_dir and not os.path.exists(output_dir):
             os.makedirs(output_dir, exist_ok=True)
         log(f"writing outputs to {output_dir}")
         result.to_csv(output_path, index=False)
         query.stats_df.to_csv(os.path.join(output_dir, query.stats_filename), sep="\t")
-        result.loc[:, ["coord", "peptide", "coding_sequence", "peptide_context"]].to_csv(
+        result.loc[:, ["uid", "coord", "peptide", "coding_sequence", "peptide_context"]].to_csv(
             os.path.join(output_dir, "snaf_intermediates.tsv"),
             header=False,
             index=False,
@@ -409,16 +422,8 @@ def _filter_maxmin(
             if isinstance(control, pd.DataFrame):
                 junction_to_mean_add = control.mean(axis=1).to_dict()
             elif isinstance(control, ad.AnnData):
-                if "mean" in control.obs.columns:
-                    junction_to_mean_add = control.obs.loc[
-                        control.obs_names.isin(junction_count_matrix.index), "mean"
-                    ].to_dict()
-                else:
-                    selected_obs = [obs_name for obs_name in control.obs_names if obs_name in junction_count_matrix.index]
-                    junction_to_mean_add = np.asarray(control[selected_obs, :].X.mean(axis=1)).squeeze()
-                    junction_to_mean_add = {
-                        uid: value for uid, value in zip(selected_obs, junction_to_mean_add)
-                    }
+                log(f"computing exact means for control cohort {cohort_name}")
+                junction_to_mean_add = ann_data_row_means_exact(control, junction_count_matrix.index)
             else:
                 raise TypeError("control must be either a pandas DataFrame or an AnnData object")
             df["mean_add"] = df.index.map(junction_to_mean_add).fillna(value=0)
