@@ -4,6 +4,7 @@ from ast import literal_eval
 from dataclasses import dataclass
 import os
 import re
+import sys
 from typing import Iterable
 
 import anndata as ad
@@ -67,6 +68,10 @@ class QueryResult:
     stats_filename: str
 
 
+def log(message: str) -> None:
+    print(f"[msnaf] {message}", file=sys.stderr, flush=True)
+
+
 def load_counts_matrix(path: str, sep: str = "\t") -> pd.DataFrame:
     df = pd.read_csv(path, sep=sep, index_col=0)
     df.index = [item.split("=")[0] for item in df.index]
@@ -118,12 +123,20 @@ def export_peptides(
     normal_prevalance_cutoff: float = 0.01,
     tumor_prevalance_cutoff: float = 0.1,
 ) -> pd.DataFrame:
+    log(f"loading counts matrix from {counts_path}")
     df = load_counts_matrix(counts_path)
+    log(f"loaded counts matrix with {df.shape[0]} junctions across {df.shape[1]} samples")
+    log("loading additional control databases")
     add_control = subset_controls(
         load_controls(refs_dir, use_tcga_control=use_tcga_control),
         set(df.index),
         filter_mode,
     )
+    if add_control is None:
+        log("no additional controls loaded")
+    else:
+        log(f"loaded additional controls: {', '.join(sorted(add_control.keys()))}")
+    log(f"loading reference bundle from {refs_dir}")
     reference = load_reference_data(
         df=df,
         refs_dir=refs_dir,
@@ -137,6 +150,7 @@ def export_peptides(
         tumor_prevalance_cutoff=tumor_prevalance_cutoff,
     )
     try:
+        log(f"filtering junctions with mode={filter_mode}")
         query = filter_junctions(
             junction_count_matrix=df,
             reference=reference,
@@ -144,7 +158,10 @@ def export_peptides(
             filter_mode=filter_mode,
             not_in_db=not_in_db,
         )
+        log(f"filtering complete: {len(query.valid)} valid, {len(query.invalid)} filtered out")
+        log("translating retained junctions")
         records = collect_records(query.valid, reference, strict=strict)
+        log(f"translation complete: {len(records)} peptide rows")
         result = pd.DataFrame.from_records(
             records,
             columns=["uid", "coord", "peptide", "coding_sequence", "peptide_context"],
@@ -154,6 +171,7 @@ def export_peptides(
         output_dir = os.path.dirname(os.path.abspath(output_path))
         if output_dir and not os.path.exists(output_dir):
             os.makedirs(output_dir, exist_ok=True)
+        log(f"writing outputs to {output_dir}")
         result.to_csv(output_path, index=False)
         query.stats_df.to_csv(os.path.join(output_dir, query.stats_filename), sep="\t")
         result.loc[:, ["coord", "peptide", "coding_sequence", "peptide_context"]].to_csv(
@@ -161,6 +179,7 @@ def export_peptides(
             header=False,
             index=False,
         )
+        log("run complete")
         return result
     finally:
         reference.genome.close()
@@ -168,7 +187,10 @@ def export_peptides(
 
 def collect_records(valid_uids: list[str], reference: ReferenceData, strict: bool = False) -> list[dict]:
     records = []
-    for uid in valid_uids:
+    total = len(valid_uids)
+    for index, uid in enumerate(valid_uids, start=1):
+        if index == 1 or index % 250 == 0 or index == total:
+            log(f"translating junction {index}/{total}")
         records.extend(translate_uid(uid, reference, strict=strict))
     return records
 
@@ -192,16 +214,23 @@ def load_reference_data(
     start_codon_path = os.path.join(refs_dir, "Alt91_db", "df_start_codon.txt")
     gtex_db = os.path.join(refs_dir, "controls", "GTEx_junction_counts.h5ad")
 
+    log("loading exon coordinate table")
     dict_exon_coords = exon_coords_to_dict(exon_table)
+    log("loading transcript exon database")
     dict_exonlist = construct_dict_exonlist(transcript_db)
+    log("loading splice flank FASTA")
     dict_fa = fasta_to_dict(fasta)
+    log("loading GTF phase annotations")
     phase_inferer_gtf_dict = process_gtf(gtf)
+    log(f"opening reference genome FASTA {genome_fasta_path}")
     genome = GenomeReference.open(genome_fasta_path)
 
+    log("loading start codon table")
     df_start_codon = pd.read_csv(start_codon_path, sep="\t", index_col=0)
     df_start_codon["start_codon"] = [literal_eval(item) for item in df_start_codon["start_codon"]]
     dict_start_codon = df_start_codon["start_codon"].to_dict()
 
+    log("loading GTEx control database")
     adata, adata_gtex = configure_controls(
         df=df,
         gtex_db=gtex_db,
