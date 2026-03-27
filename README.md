@@ -6,6 +6,8 @@
 
 `msnaf` is a minimal, translation-only rewrite of the SNAF execution path you described.
 
+It is fully offline. It does not query UCSC or any other remote service. You must provide a reference genome FASTA with `--genome-fasta`.
+
 It takes `counts.original.full.txt`, applies the same junction-vs-control filtering logic that SNAF uses, reconstructs splice-junction sequences against the same reference bundle, and emits only:
 
 - `uid`
@@ -62,6 +64,8 @@ SNAF-style flow:
 - `Alt91_db/df_start_codon.txt`
 - `controls/GTEx_junction_counts.h5ad`
 
+It also requires a reference genome FASTA outside or alongside the bundle, passed explicitly with `--genome-fasta`.
+
 If present, `controls/tcga_matched_control_junction_count.h5ad` is also loaded by default, matching your existing SNAF process.
 
 ## Local Run
@@ -81,6 +85,7 @@ Run:
 msnaf \
   --counts /path/to/counts.original.full.txt \
   --refs /path/to/SNAF_refs \
+  --genome-fasta /path/to/genome.fa \
   --output /path/to/snaf_peptides.csv
 ```
 
@@ -127,6 +132,7 @@ docker run --rm \
   msnaf:latest \
   --counts /data/counts.original.full.txt \
   --refs /data/refs \
+  --genome-fasta /data/genome.fa \
   --output /data/snaf_peptides.csv
 ```
 
@@ -146,6 +152,8 @@ cd ~/dev/msnaf
 python3 tests/run_fixture_comparison.py --fixture-dir /path/to/msnaf_test_data
 ```
 
+In fixture-dir mode, the helper expects `/path/to/msnaf_test_data/genome.fa`.
+
 Explicit-path form:
 
 ```bash
@@ -153,6 +161,7 @@ cd ~/dev/msnaf
 python3 tests/run_fixture_comparison.py \
   --counts /path/to/counts.original.full.txt \
   --refs /path/to/snaf-data \
+  --genome-fasta /path/to/genome.fa \
   --expected-intermediates /path/to/snaf_intermediates.tsv \
   --expected-stats /path/to/result/NeoJunction_statistics_maxmin.txt
 ```

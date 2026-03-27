@@ -1,9 +1,9 @@
-import tempfile
-import unittest
-from unittest.mock import patch
 import pathlib
 import sys
+import tempfile
 import types
+import unittest
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -30,12 +30,7 @@ except ModuleNotFoundError:
     sys.modules["anndata"] = ad_module
     import anndata as ad
 
-if "xmltodict" not in sys.modules:
-    xmltodict_module = types.ModuleType("xmltodict")
-    xmltodict_module.parse = lambda content: {}
-    sys.modules["xmltodict"] = xmltodict_module
-
-from msnaf.core import ReferenceData, collect_records, filter_junctions, iter_peptide_records, load_counts_matrix
+from msnaf.core import GenomeReference, ReferenceData, collect_records, filter_junctions, iter_peptide_records, load_counts_matrix, retrieve_seq_from_genome, utr_junction
 
 
 class CoreTests(unittest.TestCase):
@@ -70,6 +65,7 @@ class CoreTests(unittest.TestCase):
             dict_fa={},
             dict_start_codon={},
             phase_inferer_gtf_dict={},
+            genome=GenomeReference(records={}),
             adata=gtex,
             adata_gtex=gtex,
             t_min=20,
@@ -112,6 +108,7 @@ class CoreTests(unittest.TestCase):
             dict_fa={},
             dict_start_codon={},
             phase_inferer_gtf_dict={},
+            genome=GenomeReference(records={}),
             adata=None,
             adata_gtex=None,
             t_min=20,
@@ -146,6 +143,7 @@ class CoreTests(unittest.TestCase):
             dict_fa={},
             dict_start_codon={},
             phase_inferer_gtf_dict={},
+            genome=GenomeReference(records={}),
             adata=None,
             adata_gtex=None,
             t_min=20,
@@ -183,12 +181,68 @@ class CoreTests(unittest.TestCase):
                          }
                      ],
                  ):
-                df = core.export_peptides(counts_path=counts_path, refs_dir=tmpdir, output_path=output_path)
+                df = core.export_peptides(
+                    counts_path=counts_path,
+                    refs_dir=tmpdir,
+                    genome_fasta_path=f"{tmpdir}/genome.fa",
+                    output_path=output_path,
+                )
 
             self.assertEqual(df.shape[0], 1)
             self.assertTrue(pathlib.Path(output_path).exists())
             self.assertTrue(pathlib.Path(f"{tmpdir}/result/snaf_intermediates.tsv").exists())
             self.assertTrue(pathlib.Path(f"{tmpdir}/result/NeoJunction_statistics_maxmin.txt").exists())
+
+    def test_retrieve_seq_from_genome_returns_placeholder_for_missing_chromosome(self):
+        reference = ReferenceData(
+            dict_exon_coords={},
+            dict_exonlist={},
+            dict_fa={},
+            dict_start_codon={},
+            phase_inferer_gtf_dict={},
+            genome=GenomeReference(records={}),
+            adata=None,
+            adata_gtex=None,
+            t_min=20,
+            n_max=3,
+            normal_cutoff=5,
+            tumor_cutoff=20,
+            normal_prevalance_cutoff=0.01,
+            tumor_prevalance_cutoff=0.1,
+        )
+
+        seq = retrieve_seq_from_genome(reference, "chr1", 1, 100)
+
+        self.assertEqual(seq, "#" * 10)
+
+    def test_utr_junction_reads_from_local_genome_fasta(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fasta_path = pathlib.Path(tmpdir) / "genome.fa"
+            fasta_path.write_text(">chr1\nACGTACGTACGT\n", encoding="utf-8")
+            genome = GenomeReference.open(str(fasta_path))
+            try:
+                reference = ReferenceData(
+                    dict_exon_coords={},
+                    dict_exonlist={},
+                    dict_fa={},
+                    dict_start_codon={},
+                    phase_inferer_gtf_dict={},
+                    genome=genome,
+                    adata=None,
+                    adata_gtex=None,
+                    t_min=20,
+                    n_max=3,
+                    normal_cutoff=5,
+                    tumor_cutoff=20,
+                    normal_prevalance_cutoff=0.01,
+                    tumor_prevalance_cutoff=0.1,
+                )
+
+                seq = utr_junction("4", "ENSG1", "+", "chr1", "site1", reference, seq_len=4)
+            finally:
+                genome.close()
+
+        self.assertEqual(seq, "ACGT")
 
 
 if __name__ == "__main__":

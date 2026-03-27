@@ -7,13 +7,37 @@ import re
 from typing import Iterable
 
 import anndata as ad
+from Bio import SeqIO
 from Bio.Seq import Seq
 from Bio.SeqIO.FastaIO import SimpleFastaParser
 import numpy as np
 import pandas as pd
-import requests
 from scipy.sparse import csr_matrix
-import xmltodict
+
+
+@dataclass
+class GenomeReference:
+    records: object
+
+    @classmethod
+    def open(cls, fasta_path: str) -> "GenomeReference":
+        return cls(records=SeqIO.index(fasta_path, "fasta"))
+
+    def fetch(self, chrom: str, start: int, end: int) -> str:
+        names = [chrom]
+        if chrom.startswith("chr"):
+            names.append(chrom[3:])
+        else:
+            names.append(f"chr{chrom}")
+        for name in names:
+            if name in self.records:
+                return str(self.records[name].seq[start - 1 : end]).upper()
+        raise KeyError(chrom)
+
+    def close(self) -> None:
+        close = getattr(self.records, "close", None)
+        if close is not None:
+            close()
 
 
 @dataclass
@@ -23,6 +47,7 @@ class ReferenceData:
     dict_fa: dict
     dict_start_codon: dict
     phase_inferer_gtf_dict: dict
+    genome: GenomeReference
     adata: ad.AnnData
     adata_gtex: ad.AnnData
     t_min: int
@@ -80,6 +105,7 @@ def subset_controls(add_control: dict | None, tested_junctions: set[str], filter
 def export_peptides(
     counts_path: str,
     refs_dir: str,
+    genome_fasta_path: str,
     output_path: str,
     strict: bool = False,
     filter_mode: str = "maxmin",
@@ -101,6 +127,7 @@ def export_peptides(
     reference = load_reference_data(
         df=df,
         refs_dir=refs_dir,
+        genome_fasta_path=genome_fasta_path,
         filter_mode=filter_mode,
         t_min=t_min,
         n_max=n_max,
@@ -109,31 +136,34 @@ def export_peptides(
         normal_prevalance_cutoff=normal_prevalance_cutoff,
         tumor_prevalance_cutoff=tumor_prevalance_cutoff,
     )
-    query = filter_junctions(
-        junction_count_matrix=df,
-        reference=reference,
-        add_control=add_control,
-        filter_mode=filter_mode,
-        not_in_db=not_in_db,
-    )
-    records = collect_records(query.valid, reference, strict=strict)
-    result = pd.DataFrame.from_records(
-        records,
-        columns=["uid", "coord", "peptide", "coding_sequence", "peptide_context"],
-    )
-    if result.shape[0] != 0:
-        result = result.drop_duplicates().sort_values(["uid", "peptide", "coding_sequence"])
-    output_dir = os.path.dirname(os.path.abspath(output_path))
-    if output_dir and not os.path.exists(output_dir):
-        os.makedirs(output_dir, exist_ok=True)
-    result.to_csv(output_path, index=False)
-    query.stats_df.to_csv(os.path.join(output_dir, query.stats_filename), sep="\t")
-    result.loc[:, ["coord", "peptide", "coding_sequence", "peptide_context"]].to_csv(
-        os.path.join(output_dir, "snaf_intermediates.tsv"),
-        header=False,
-        index=False,
-    )
-    return result
+    try:
+        query = filter_junctions(
+            junction_count_matrix=df,
+            reference=reference,
+            add_control=add_control,
+            filter_mode=filter_mode,
+            not_in_db=not_in_db,
+        )
+        records = collect_records(query.valid, reference, strict=strict)
+        result = pd.DataFrame.from_records(
+            records,
+            columns=["uid", "coord", "peptide", "coding_sequence", "peptide_context"],
+        )
+        if result.shape[0] != 0:
+            result = result.drop_duplicates().sort_values(["uid", "peptide", "coding_sequence"])
+        output_dir = os.path.dirname(os.path.abspath(output_path))
+        if output_dir and not os.path.exists(output_dir):
+            os.makedirs(output_dir, exist_ok=True)
+        result.to_csv(output_path, index=False)
+        query.stats_df.to_csv(os.path.join(output_dir, query.stats_filename), sep="\t")
+        result.loc[:, ["coord", "peptide", "coding_sequence", "peptide_context"]].to_csv(
+            os.path.join(output_dir, "snaf_intermediates.tsv"),
+            header=False,
+            index=False,
+        )
+        return result
+    finally:
+        reference.genome.close()
 
 
 def collect_records(valid_uids: list[str], reference: ReferenceData, strict: bool = False) -> list[dict]:
@@ -146,6 +176,7 @@ def collect_records(valid_uids: list[str], reference: ReferenceData, strict: boo
 def load_reference_data(
     df: pd.DataFrame,
     refs_dir: str,
+    genome_fasta_path: str,
     filter_mode: str,
     t_min: int = 20,
     n_max: int = 3,
@@ -165,6 +196,7 @@ def load_reference_data(
     dict_exonlist = construct_dict_exonlist(transcript_db)
     dict_fa = fasta_to_dict(fasta)
     phase_inferer_gtf_dict = process_gtf(gtf)
+    genome = GenomeReference.open(genome_fasta_path)
 
     df_start_codon = pd.read_csv(start_codon_path, sep="\t", index_col=0)
     df_start_codon["start_codon"] = [literal_eval(item) for item in df_start_codon["start_codon"]]
@@ -187,6 +219,7 @@ def load_reference_data(
         dict_fa=dict_fa,
         dict_start_codon=dict_start_codon,
         phase_inferer_gtf_dict=phase_inferer_gtf_dict,
+        genome=genome,
         adata=adata,
         adata_gtex=adata_gtex,
         t_min=t_min,
@@ -703,31 +736,27 @@ def utr_attrs(ensid: str, dict_exon_coords: dict) -> tuple[str, str]:
     return attrs[0], attrs[1]
 
 
-def retrieve_seq_from_ucsc_api(chr_: str, start: int, end: int) -> str:
-    url = f"http://genome.ucsc.edu/cgi-bin/das/hg38/dna?segment={chr_}:{start},{end}"
-    response = requests.get(url, timeout=30)
-    response.raise_for_status()
+def retrieve_seq_from_genome(reference: ReferenceData, chr_: str, start: int, end: int) -> str:
     try:
-        parsed = xmltodict.parse(response.content)
+        return reference.genome.fetch(chr_, start, end)
     except Exception:
         return "#" * 10
-    return parsed["DASDNA"]["SEQUENCE"]["DNA"]["#text"].replace("\n", "").upper()
 
 
-def utr_junction(site: str, ensid: str, strand: str, chr_: str, flag: str, seq_len: int = 100) -> str:
+def utr_junction(site: str, ensid: str, strand: str, chr_: str, flag: str, reference: ReferenceData, seq_len: int = 100) -> str:
     del ensid
     if flag == "site1" and strand == "+":
         other_site = int(site) - seq_len + 1
-        return retrieve_seq_from_ucsc_api(chr_, int(other_site), int(site))
+        return retrieve_seq_from_genome(reference, chr_, int(other_site), int(site))
     if flag == "site1" and strand == "-":
         other_site = int(site) + seq_len - 1
-        exon_seq = retrieve_seq_from_ucsc_api(chr_, int(site), int(other_site))
+        exon_seq = retrieve_seq_from_genome(reference, chr_, int(site), int(other_site))
         return str(Seq(exon_seq).reverse_complement())
     if flag == "site2" and strand == "+":
         other_site = int(site) + seq_len - 1
-        return retrieve_seq_from_ucsc_api(chr_, int(site), int(other_site))
+        return retrieve_seq_from_genome(reference, chr_, int(site), int(other_site))
     other_site = int(site) - seq_len + 1
-    exon_seq = retrieve_seq_from_ucsc_api(chr_, int(other_site), int(site))
+    exon_seq = retrieve_seq_from_genome(reference, chr_, int(other_site), int(site))
     return str(Seq(exon_seq).reverse_complement())
 
 
@@ -773,7 +802,7 @@ def subexon_tran(subexon: str, ensid: str, flag: str, code: int, reference: Refe
             attrs = reference.dict_exon_coords[ensid][actual_exon]
         except KeyError:
             chr_utr, strand_utr = utr_attrs(ensid, reference.dict_exon_coords)
-            return utr_junction(suffix, ensid, strand_utr, chr_utr, flag)
+            return utr_junction(suffix, ensid, strand_utr, chr_utr, flag, reference)
         if flag == "site2":
             if attrs[1] == "+":
                 return query_from_dict_fa(suffix, attrs[3], ensid, attrs[1], reference.dict_fa)

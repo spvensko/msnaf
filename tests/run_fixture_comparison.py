@@ -41,6 +41,7 @@ def run_fixture_comparison(fixture_dir: Path, keep_output: bool = False) -> int:
     refs_dir = fixture_dir / "snaf-data"
     expected_intermediates = fixture_dir / "snaf_intermediates.tsv"
     expected_stats = fixture_dir / "result" / "NeoJunction_statistics_maxmin.txt"
+    genome_fasta = fixture_dir / "genome.fa"
 
     if not counts_path.exists():
         print(f"missing counts file: {counts_path}")
@@ -54,6 +55,9 @@ def run_fixture_comparison(fixture_dir: Path, keep_output: bool = False) -> int:
     if not expected_stats.exists():
         print(f"missing expected stats: {expected_stats}")
         return 2
+    if not genome_fasta.exists():
+        print(f"missing genome fasta: {genome_fasta}")
+        return 2
 
     tmpdir_obj = tempfile.TemporaryDirectory(prefix="msnaf_fixture_compare_")
     tmpdir = Path(tmpdir_obj.name)
@@ -62,6 +66,7 @@ def run_fixture_comparison(fixture_dir: Path, keep_output: bool = False) -> int:
         export_peptides(
             counts_path=str(counts_path),
             refs_dir=str(refs_dir),
+            genome_fasta_path=str(genome_fasta),
             output_path=str(output_path),
         )
 
@@ -92,6 +97,7 @@ def run_fixture_comparison(fixture_dir: Path, keep_output: bool = False) -> int:
 def run_explicit_comparison(
     counts_path: Path,
     refs_dir: Path,
+    genome_fasta: Path,
     expected_intermediates: Path,
     expected_stats: Path,
     keep_output_dir: Path | None = None,
@@ -108,6 +114,9 @@ def run_explicit_comparison(
     if not expected_stats.exists():
         print(f"missing expected stats: {expected_stats}")
         return 2
+    if not genome_fasta.exists():
+        print(f"missing genome fasta: {genome_fasta}")
+        return 2
 
     tmpdir_obj = tempfile.TemporaryDirectory(prefix="msnaf_fixture_compare_")
     tmpdir = Path(tmpdir_obj.name)
@@ -116,6 +125,7 @@ def run_explicit_comparison(
         export_peptides(
             counts_path=str(counts_path),
             refs_dir=str(refs_dir),
+            genome_fasta_path=str(genome_fasta),
             output_path=str(output_path),
         )
 
@@ -148,15 +158,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--fixture-dir",
+        "--figure-dir",
         help="Directory containing counts.original.full.txt, snaf-data/, result/, and snaf_intermediates.tsv",
     )
     parser.add_argument(
         "--counts",
+        "--count",
         help="Path to counts.original.full.txt",
     )
     parser.add_argument(
         "--refs",
         help="Path to the extracted SNAF reference directory",
+    )
+    parser.add_argument(
+        "--genome-fasta",
+        help="Path to the reference genome FASTA used for offline UTR sequence lookup",
     )
     parser.add_argument(
         "--expected-intermediates",
@@ -182,12 +198,13 @@ def main() -> int:
     required = [
         args.counts,
         args.refs,
+        args.genome_fasta,
         args.expected_intermediates,
         args.expected_stats,
     ]
     if any(value is None for value in required):
         print(
-            "Either --fixture-dir or all of --counts, --refs, --expected-intermediates, and --expected-stats are required."
+            "Either --fixture-dir or all of --counts, --refs, --genome-fasta, --expected-intermediates, and --expected-stats are required."
         )
         return 2
 
@@ -198,6 +215,7 @@ def main() -> int:
     return run_explicit_comparison(
         counts_path=Path(args.counts),
         refs_dir=Path(args.refs),
+        genome_fasta=Path(args.genome_fasta),
         expected_intermediates=Path(args.expected_intermediates),
         expected_stats=Path(args.expected_stats),
         keep_output_dir=keep_output_dir,

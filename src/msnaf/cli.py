@@ -12,6 +12,7 @@ def build_parser():
     )
     parser.add_argument("--counts", required=True, help="Path to counts.original.full.txt or equivalent.")
     parser.add_argument("--refs", required=True, help="Path to the extracted SNAF reference bundle.")
+    parser.add_argument("--genome-fasta", required=True, help="Path to the reference genome FASTA used for offline UTR sequence lookup.")
     parser.add_argument("--output", required=True, help="CSV path to write.")
     parser.add_argument("--strict", action="store_true", help="Require start-codon support.")
     parser.add_argument(
@@ -54,6 +55,7 @@ def main():
     export_peptides(
         counts_path=args.counts,
         refs_dir=args.refs,
+        genome_fasta_path=args.genome_fasta,
         output_path=args.output,
         strict=args.strict,
         filter_mode=args.filter_mode,
@@ -70,4 +72,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

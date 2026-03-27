@@ -14,9 +14,7 @@ dependencies = [
   "h5py",
   "numpy",
   "pandas",
-  "requests",
   "scipy",
-  "xmltodict",
 ]
 
 [project.optional-dependencies]
@@ -27,4 +25,3 @@ msnaf = "msnaf.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
