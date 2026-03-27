@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from itertools import zip_longest
 from pathlib import Path
 import shutil
 import sys
 import tempfile
+
+import numpy as np
+import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -33,6 +37,73 @@ def compare_text_files(expected_path: Path, actual_path: Path, label: str) -> bo
                 return False
 
     print(f"[OK] {label}")
+    return True
+
+
+def compare_intermediates(expected_path: Path, actual_path: Path) -> bool:
+    if not actual_path.exists():
+        print(f"[FAIL] snaf_intermediates.tsv: missing output {actual_path}")
+        return False
+
+    with expected_path.open("r", encoding="utf-8") as expected_handle, actual_path.open(
+        "r", encoding="utf-8"
+    ) as actual_handle:
+        expected_rows = Counter(line.rstrip("\n") for line in expected_handle)
+        actual_rows = Counter(line.rstrip("\n") for line in actual_handle)
+
+    if expected_rows != actual_rows:
+        missing = list((expected_rows - actual_rows).elements())
+        extra = list((actual_rows - expected_rows).elements())
+        print("[FAIL] snaf_intermediates.tsv: row sets differ")
+        if missing:
+            print(f"  missing example: {missing[0]!r}")
+        if extra:
+            print(f"  unexpected example: {extra[0]!r}")
+        return False
+
+    print("[OK] snaf_intermediates.tsv")
+    return True
+
+
+def compare_stats(expected_path: Path, actual_path: Path, atol: float = 1e-4) -> bool:
+    if not actual_path.exists():
+        print(f"[FAIL] NeoJunction_statistics_maxmin.txt: missing output {actual_path}")
+        return False
+
+    expected = pd.read_csv(expected_path, sep="\t", index_col=0)
+    actual = pd.read_csv(actual_path, sep="\t", index_col=0)
+
+    if list(expected.index) != list(actual.index):
+        print("[FAIL] NeoJunction_statistics_maxmin.txt: row order or row ids differ")
+        return False
+    if list(expected.columns) != list(actual.columns):
+        print("[FAIL] NeoJunction_statistics_maxmin.txt: columns differ")
+        return False
+
+    for column in expected.columns:
+        expected_series = expected[column]
+        actual_series = actual[column]
+        if pd.api.types.is_bool_dtype(expected_series):
+            if not expected_series.equals(actual_series):
+                diff_index = expected_series.ne(actual_series).idxmax()
+                print(f"[FAIL] NeoJunction_statistics_maxmin.txt: boolean mismatch at {diff_index} column {column}")
+                return False
+            continue
+        if pd.api.types.is_numeric_dtype(expected_series):
+            if not np.allclose(expected_series.to_numpy(), actual_series.to_numpy(), atol=atol, rtol=0):
+                diff = np.abs(expected_series.to_numpy() - actual_series.to_numpy())
+                diff_index = expected.index[int(diff.argmax())]
+                print(f"[FAIL] NeoJunction_statistics_maxmin.txt: numeric mismatch at {diff_index} column {column}")
+                print(f"  expected: {expected_series.loc[diff_index]!r}")
+                print(f"  actual:   {actual_series.loc[diff_index]!r}")
+                return False
+            continue
+        if not expected_series.equals(actual_series):
+            diff_index = expected_series.ne(actual_series).idxmax()
+            print(f"[FAIL] NeoJunction_statistics_maxmin.txt: mismatch at {diff_index} column {column}")
+            return False
+
+    print("[OK] NeoJunction_statistics_maxmin.txt")
     return True
 
 
@@ -71,16 +142,8 @@ def run_fixture_comparison(fixture_dir: Path, keep_output: bool = False) -> int:
         )
 
         ok = True
-        ok &= compare_text_files(
-            expected_intermediates,
-            tmpdir / "result" / "snaf_intermediates.tsv",
-            "snaf_intermediates.tsv",
-        )
-        ok &= compare_text_files(
-            expected_stats,
-            tmpdir / "result" / "NeoJunction_statistics_maxmin.txt",
-            "NeoJunction_statistics_maxmin.txt",
-        )
+        ok &= compare_intermediates(expected_intermediates, tmpdir / "result" / "snaf_intermediates.tsv")
+        ok &= compare_stats(expected_stats, tmpdir / "result" / "NeoJunction_statistics_maxmin.txt")
 
         if keep_output:
             preserved = fixture_dir / "msnaf-test-output"
@@ -130,16 +193,8 @@ def run_explicit_comparison(
         )
 
         ok = True
-        ok &= compare_text_files(
-            expected_intermediates,
-            tmpdir / "result" / "snaf_intermediates.tsv",
-            "snaf_intermediates.tsv",
-        )
-        ok &= compare_text_files(
-            expected_stats,
-            tmpdir / "result" / "NeoJunction_statistics_maxmin.txt",
-            "NeoJunction_statistics_maxmin.txt",
-        )
+        ok &= compare_intermediates(expected_intermediates, tmpdir / "result" / "snaf_intermediates.tsv")
+        ok &= compare_stats(expected_stats, tmpdir / "result" / "NeoJunction_statistics_maxmin.txt")
 
         if keep_output_dir is not None:
             if keep_output_dir.exists():

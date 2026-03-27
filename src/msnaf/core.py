@@ -114,9 +114,8 @@ def ann_data_row_means_exact(control: ad.AnnData, target_index: pd.Index, chunk_
     for start in range(0, len(selected), chunk_size):
         chunk = selected[start : start + chunk_size]
         positions = [position for position, _ in chunk]
-        names = [name for _, name in chunk]
-        values = np.asarray(control[positions, :].X.mean(axis=1)).reshape(-1)
-        means.update({name: float(value) for name, value in zip(names, values)})
+        chunk_df = control[positions, :].to_df()
+        means.update({uid: float(value) for uid, value in chunk_df.mean(axis=1).to_dict().items()})
     return means
 
 
