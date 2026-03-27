@@ -23,6 +23,13 @@ It does not do any of the following:
 - multiprocessing
 - T-antigen/B-antigen reporting layers
 
+For drop-in workflow compatibility, `msnaf` also writes these legacy-style files in the output directory:
+
+- `msnaf_peptides.csv`
+- `snaf_intermediates.tsv`
+- `NeoJunction_statistics_maxmin.txt` when run in `maxmin` mode
+- `NeoJunction_statistics_prevalance.txt` when run in `prevalance` mode
+
 ## How It Differs From SNAF
 
 SNAF is a large framework with T-cell and B-cell antigen workflows. `msnaf` is intentionally narrower.
@@ -97,6 +104,12 @@ ENSG00000110427:E7.1-E8.1,chr11:33559911-33561676(+),PLEYPNLDI,CCACTGGAATATCCCAA
 ENSG00000110427:E18.1-E20.1,chr11:33583501-33591237(+),KPVQGFDYA,AAGCCTGTGCAAGGCTTTGATTATGCCA,LPQRAKPVQGFDYAKQHLGQQGAD
 ```
 
+Legacy compatibility file:
+
+```text
+chr11:33559911-33561676(+),PLEYPNLDI,CCACTGGAATATCCCAACCTTGACATAT,PLEYPNLDISETTRDYWVI
+```
+
 ## Docker
 
 Build from the `msnaf` repo root:
@@ -124,4 +137,22 @@ The container entrypoint is `msnaf`, so the runtime arguments are the CLI flags 
 ```bash
 cd ~/dev/msnaf
 python3 -m unittest discover -s tests -v
+```
+
+Fixture comparison helper:
+
+```bash
+cd ~/dev/msnaf
+python3 tests/run_fixture_comparison.py --fixture-dir /path/to/msnaf_test_data
+```
+
+Explicit-path form:
+
+```bash
+cd ~/dev/msnaf
+python3 tests/run_fixture_comparison.py \
+  --counts /path/to/counts.original.full.txt \
+  --refs /path/to/snaf-data \
+  --expected-intermediates /path/to/snaf_intermediates.tsv \
+  --expected-stats /path/to/result/NeoJunction_statistics_maxmin.txt
 ```

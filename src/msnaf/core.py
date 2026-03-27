@@ -38,6 +38,8 @@ class QueryResult:
     valid: list[str]
     invalid: list[str]
     cond_df: pd.DataFrame
+    stats_df: pd.DataFrame
+    stats_filename: str
 
 
 def load_counts_matrix(path: str, sep: str = "\t") -> pd.DataFrame:
@@ -53,7 +55,26 @@ def load_controls(refs_dir: str, use_tcga_control: bool = True) -> dict | None:
     tcga_path = os.path.join(refs_dir, "controls", "tcga_matched_control_junction_count.h5ad")
     if not os.path.exists(tcga_path):
         return None
-    return {"tcga_control": ad.read_h5ad(tcga_path)}
+    return {"tcga_control": ad.read_h5ad(tcga_path, backed="r")}
+
+
+def subset_controls(add_control: dict | None, tested_junctions: set[str], filter_mode: str) -> dict | None:
+    if add_control is None:
+        return None
+    if filter_mode == "maxmin":
+        return add_control
+    subsetted = {}
+    for cohort_name, control in add_control.items():
+        if isinstance(control, pd.DataFrame):
+            control = control.loc[~control.index.duplicated(), :]
+            control = control.loc[list(set(control.index).intersection(tested_junctions)), :]
+        elif isinstance(control, ad.AnnData):
+            selected_obs = [obs_name for obs_name in control.obs_names if obs_name in tested_junctions]
+            control = control[selected_obs, :]
+        else:
+            raise TypeError("control must be either a pandas DataFrame or an AnnData object")
+        subsetted[cohort_name] = control
+    return subsetted
 
 
 def export_peptides(
@@ -72,11 +93,15 @@ def export_peptides(
     tumor_prevalance_cutoff: float = 0.1,
 ) -> pd.DataFrame:
     df = load_counts_matrix(counts_path)
-    add_control = load_controls(refs_dir, use_tcga_control=use_tcga_control)
+    add_control = subset_controls(
+        load_controls(refs_dir, use_tcga_control=use_tcga_control),
+        set(df.index),
+        filter_mode,
+    )
     reference = load_reference_data(
         df=df,
         refs_dir=refs_dir,
-        add_control=add_control,
+        filter_mode=filter_mode,
         t_min=t_min,
         n_max=n_max,
         normal_cutoff=normal_cutoff,
@@ -102,6 +127,12 @@ def export_peptides(
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
     result.to_csv(output_path, index=False)
+    query.stats_df.to_csv(os.path.join(output_dir, query.stats_filename), sep="\t")
+    result.loc[:, ["coord", "peptide", "coding_sequence", "peptide_context"]].to_csv(
+        os.path.join(output_dir, "snaf_intermediates.tsv"),
+        header=False,
+        index=False,
+    )
     return result
 
 
@@ -115,7 +146,7 @@ def collect_records(valid_uids: list[str], reference: ReferenceData, strict: boo
 def load_reference_data(
     df: pd.DataFrame,
     refs_dir: str,
-    add_control: dict | None = None,
+    filter_mode: str,
     t_min: int = 20,
     n_max: int = 3,
     normal_cutoff: int = 5,
@@ -142,7 +173,7 @@ def load_reference_data(
     adata, adata_gtex = configure_controls(
         df=df,
         gtex_db=gtex_db,
-        add_control=add_control,
+        filter_mode=filter_mode,
         t_min=t_min,
         n_max=n_max,
         normal_cutoff=normal_cutoff,
@@ -170,7 +201,7 @@ def load_reference_data(
 def configure_controls(
     df: pd.DataFrame,
     gtex_db: str,
-    add_control: dict | None,
+    filter_mode: str,
     t_min: int,
     n_max: int,
     normal_cutoff: int,
@@ -179,52 +210,15 @@ def configure_controls(
     tumor_prevalance_cutoff: float,
 ) -> tuple[ad.AnnData, ad.AnnData]:
     tested_junctions = set(df.index)
-    adata = ad.read_h5ad(gtex_db)
-    adata = adata[~adata.obs_names.duplicated(), :]
-    adata = adata[list(set(adata.obs_names).intersection(tested_junctions)), :]
+    adata = ad.read_h5ad(gtex_db, backed="r")
+    if filter_mode != "maxmin":
+        selected_obs = [obs_name for obs_name in adata.obs_names if obs_name in tested_junctions]
+        adata = adata[selected_obs, :]
     if "mean" not in adata.obs.columns:
         adata.obs["mean"] = np.array(adata.X.mean(axis=1)).squeeze()
     if "total_count" not in adata.var.columns:
         adata.var["total_count"] = np.array(adata.X.sum(axis=0)).squeeze() / 1e6
-    tissue_dict = adata.var["tissue"].to_dict()
     adata_gtex = adata
-
-    if add_control is not None:
-        for cohort_name, control in add_control.items():
-            if isinstance(control, pd.DataFrame):
-                control = control.loc[~control.index.duplicated(), :]
-                control = control.loc[list(set(control.index).intersection(tested_junctions)), :]
-                tissue_dict.update({sample: cohort_name for sample in control.columns})
-                df_left = adata.to_df()
-                df_right = control
-                df_combine = df_left.join(other=df_right, how="outer").fillna(0)
-                adata = ad.AnnData(
-                    X=csr_matrix(df_combine.values),
-                    obs=pd.DataFrame(index=df_combine.index),
-                    var=pd.DataFrame(index=df_combine.columns),
-                )
-            elif isinstance(control, ad.AnnData):
-                control = control[~control.obs_names.duplicated(), :]
-                control = control[list(set(control.obs_names).intersection(tested_junctions)), :]
-                if "tissue" in control.var.columns:
-                    tissue_dict.update(control.var["tissue"].to_dict())
-                else:
-                    tissue_dict.update({sample: cohort_name for sample in control.var_names})
-                df_left = adata.to_df()
-                df_right = control.to_df()
-                df_combine = df_left.join(other=df_right, how="outer").fillna(0)
-                adata = ad.AnnData(
-                    X=csr_matrix(df_combine.values),
-                    obs=pd.DataFrame(index=df_combine.index),
-                    var=pd.DataFrame(index=df_combine.columns),
-                )
-            else:
-                raise TypeError("control must be either a pandas DataFrame or an AnnData object")
-
-            adata.var["tissue"] = adata.var_names.map(tissue_dict).values
-            adata.obs["mean"] = np.array(adata.X.mean(axis=1)).squeeze()
-            total_count = np.array(adata.X.sum(axis=0)).squeeze() / 1e6
-            adata.var["total_count"] = total_count
 
     return adata, adata_gtex
 
@@ -237,22 +231,30 @@ def filter_junctions(
     not_in_db: bool = False,
 ) -> QueryResult:
     if filter_mode == "prevalance":
-        valid, invalid, cond_df = _filter_prevalance(
+        valid, invalid, cond_df, stats_df = _filter_prevalance(
             junction_count_matrix=junction_count_matrix,
             reference=reference,
             add_control=add_control,
             not_in_db=not_in_db,
         )
+        stats_filename = "NeoJunction_statistics_prevalance.txt"
     elif filter_mode == "maxmin":
-        valid, invalid, cond_df = _filter_maxmin(
+        valid, invalid, cond_df, stats_df = _filter_maxmin(
             junction_count_matrix=junction_count_matrix,
             reference=reference,
             add_control=add_control,
             not_in_db=not_in_db,
         )
+        stats_filename = "NeoJunction_statistics_maxmin.txt"
     else:
         raise ValueError(f"unsupported filter mode: {filter_mode}")
-    return QueryResult(valid=valid, invalid=invalid, cond_df=cond_df)
+    return QueryResult(
+        valid=valid,
+        invalid=invalid,
+        cond_df=cond_df,
+        stats_df=stats_df,
+        stats_filename=stats_filename,
+    )
 
 
 def _filter_prevalance(
@@ -281,7 +283,7 @@ def _filter_prevalance(
         valid = [uid for uid in valid if not uid_is_in_db(uid, reference.dict_exonlist)]
 
     if add_control is not None:
-        for _, control in add_control.items():
+        for cohort_name, control in add_control.items():
             if isinstance(control, pd.DataFrame):
                 prevalance_add = np.count_nonzero(
                     (control > reference.normal_cutoff).values, axis=1
@@ -300,6 +302,13 @@ def _filter_prevalance(
                 & (df["prevalance_normal_add"] < reference.normal_prevalance_cutoff)
             )
             valid = list(set(valid).intersection(df.loc[df["cond_add"]].index.tolist()))
+            df.rename(
+                columns={
+                    "prevalance_normal_add": f"prevalance_normal_{cohort_name}",
+                    "cond_add": f"cond_{cohort_name}",
+                },
+                inplace=True,
+            )
 
     invalid = list(set(junction_count_matrix.index).difference(set(valid)))
     valid_set = set(valid)
@@ -310,7 +319,7 @@ def _filter_prevalance(
     first_half = pd.concat([placeholder] * junction_count_matrix.shape[1], axis=1)
     first_half.columns = junction_count_matrix.columns
     cond_df = first_half & (junction_count_matrix > reference.tumor_cutoff)
-    return valid, invalid, cond_df
+    return valid, invalid, cond_df, df
 
 
 def _filter_maxmin(
@@ -318,25 +327,36 @@ def _filter_maxmin(
     reference: ReferenceData,
     add_control: dict | None,
     not_in_db: bool,
-) -> tuple[list[str], list[str], pd.DataFrame]:
+) -> tuple[list[str], list[str], pd.DataFrame, pd.DataFrame]:
     df = pd.DataFrame(index=junction_count_matrix.index, data={"max": junction_count_matrix.max(axis=1).values})
+    df_to_write = [df.copy()]
     junction_to_mean = reference.adata_gtex.obs.loc[
         reference.adata_gtex.obs_names.isin(junction_count_matrix.index), "mean"
     ].to_dict()
     df["mean"] = df.index.map(junction_to_mean).fillna(value=0)
     df["diff"] = df["max"] - df["mean"]
     df["cond"] = (df["mean"] < reference.n_max) & (df["diff"] > reference.t_min)
+    df_to_write[0] = df.copy()
     valid = df.loc[df["cond"]].index.tolist()
     if not_in_db:
         valid = [uid for uid in valid if not uid_is_in_db(uid, reference.dict_exonlist)]
 
     mean_add_list = []
     if add_control is not None:
-        for _, control in add_control.items():
+        for cohort_name, control in add_control.items():
             if isinstance(control, pd.DataFrame):
                 junction_to_mean_add = control.mean(axis=1).to_dict()
             elif isinstance(control, ad.AnnData):
-                junction_to_mean_add = control.to_df().mean(axis=1).to_dict()
+                if "mean" in control.obs.columns:
+                    junction_to_mean_add = control.obs.loc[
+                        control.obs_names.isin(junction_count_matrix.index), "mean"
+                    ].to_dict()
+                else:
+                    selected_obs = [obs_name for obs_name in control.obs_names if obs_name in junction_count_matrix.index]
+                    junction_to_mean_add = np.asarray(control[selected_obs, :].X.mean(axis=1)).squeeze()
+                    junction_to_mean_add = {
+                        uid: value for uid, value in zip(selected_obs, junction_to_mean_add)
+                    }
             else:
                 raise TypeError("control must be either a pandas DataFrame or an AnnData object")
             df["mean_add"] = df.index.map(junction_to_mean_add).fillna(value=0)
@@ -344,6 +364,10 @@ def _filter_maxmin(
             df["cond_add"] = (df["mean_add"] < reference.n_max) & (df["diff_add"] > reference.t_min)
             mean_add_list.append(df["mean_add"])
             valid = list(set(valid).intersection(df.loc[df["cond_add"]].index.tolist()))
+            tmp = df.copy()
+            tmp.drop(columns=["mean", "diff", "cond"], inplace=True)
+            tmp.rename(columns=lambda column: f"{column}_{cohort_name}", inplace=True)
+            df_to_write.append(tmp)
 
     invalid = list(set(junction_count_matrix.index).difference(set(valid)))
     gtex_df = pd.concat([df["mean"]] * junction_count_matrix.shape[1], axis=1)
@@ -355,7 +379,8 @@ def _filter_maxmin(
         add_df.columns = junction_count_matrix.columns
         diff_add = junction_count_matrix - add_df
         cond_df = cond_df & (add_df < reference.n_max) & (diff_add > reference.t_min)
-    return valid, invalid, cond_df
+    stats_df = pd.concat(df_to_write, axis=1)
+    return valid, invalid, cond_df, stats_df
 
 
 def uid_is_in_db(uid: str, dict_exonlist: dict) -> bool:

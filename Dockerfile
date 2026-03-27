@@ -2,6 +2,7 @@ FROM python:3.10-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV PIP_NO_CACHE_DIR=1
 
 WORKDIR /opt/msnaf
 
@@ -15,4 +16,3 @@ RUN pip install --upgrade pip setuptools wheel \
     && pip install .
 
 ENTRYPOINT ["msnaf"]
-
