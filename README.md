@@ -1,8 +1,10 @@
 # mSNAF
 
-`msnaf` is a minimal, translation-only rewrite of the SNAF execution path you described.
+<p align="center">
+  <img src="docs/msnaf-example.png" alt="mSNAF example output" width="50%">
+</p>
 
-![mSNAF example output](docs/msnaf-example.png)
+`msnaf` is a minimal, translation-only rewrite of the SNAF execution path you described.
 
 It takes `counts.original.full.txt`, applies the same junction-vs-control filtering logic that SNAF uses, reconstructs splice-junction sequences against the same reference bundle, and emits only:
 
