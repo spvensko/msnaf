@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "msnaf"
+version = "0.1.0"
+description = "Minimal splicing peptide exporter built from the SNAF filtering and translation logic"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "anndata>=0.7",
+  "biopython>=1.79",
+  "h5py",
+  "numpy",
+  "pandas",
+  "requests",
+  "scipy",
+  "xmltodict",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.scripts]
+msnaf = "msnaf.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
