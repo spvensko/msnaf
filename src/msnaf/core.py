@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ast import literal_eval
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 import re
 import sys
@@ -57,6 +57,10 @@ class ReferenceData:
     tumor_cutoff: int
     normal_prevalance_cutoff: float
     tumor_prevalance_cutoff: float
+    junction_seq_cache: dict = field(default_factory=dict)
+    subexon_cache: dict = field(default_factory=dict)
+    coord_cache: dict = field(default_factory=dict)
+    support_phase_cache: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -473,7 +477,10 @@ def translate_uid(uid: str, reference: ReferenceData, strict: bool = False, ks: 
     if event_type == "invalid":
         return []
     junction = retrieve_junction_seq(uid, reference)
-    coord = uid_to_coord(uid, reference.dict_exon_coords)
+    coord = reference.coord_cache.get(uid)
+    if coord is None:
+        coord = uid_to_coord(uid, reference.dict_exon_coords)
+        reference.coord_cache[uid] = coord
     if "$" in junction or "*" in junction or "#" in junction or "unknown" in coord:
         return []
 
@@ -487,14 +494,18 @@ def translate_uid(uid: str, reference: ReferenceData, strict: bool = False, ks: 
 
     support_phases_dict = {}
     for pssc in reference.dict_start_codon.get(ensg, []):
-        supports = get_support_phase(
-            phase_inferer_gtf_dict=reference.phase_inferer_gtf_dict,
-            ensg=ensg,
-            coord_first_exon_last_base=coord_first_exon_last_base,
-            pssc=pssc,
-            strand=strand,
-            length_first=len(first),
-        )
+        support_key = (ensg, coord_first_exon_last_base, int(pssc), strand, len(first))
+        supports = reference.support_phase_cache.get(support_key)
+        if supports is None:
+            supports = get_support_phase(
+                phase_inferer_gtf_dict=reference.phase_inferer_gtf_dict,
+                ensg=ensg,
+                coord_first_exon_last_base=coord_first_exon_last_base,
+                pssc=pssc,
+                strand=strand,
+                length_first=len(first),
+            )
+            reference.support_phase_cache[support_key] = supports
         for phase, pssc_value, enst, strand_value in supports:
             support_phases_dict.setdefault(phase, []).append((pssc_value, enst, strand_value))
 
@@ -559,12 +570,17 @@ def detect_type(uid: str) -> str:
 
 
 def retrieve_junction_seq(uid: str, reference: ReferenceData) -> str:
+    cached = reference.junction_seq_cache.get(uid)
+    if cached is not None:
+        return cached
     ensid = uid.split(":")[0]
     subexon1, subexon2 = ":".join(uid.split(":")[1:]).split("-")
     code = is_consecutive(subexon1, subexon2)
     seq1 = subexon_tran(subexon1, ensid, "site1", code, reference)
     seq2 = subexon_tran(subexon2, ensid, "site2", code, reference)
-    return ",".join([seq1, seq2])
+    junction = ",".join([seq1, seq2])
+    reference.junction_seq_cache[uid] = junction
+    return junction
 
 
 def iter_peptide_records(
@@ -804,13 +820,19 @@ def is_consecutive(subexon1: str, subexon2: str) -> int:
 
 
 def subexon_tran(subexon: str, ensid: str, flag: str, code: int, reference: ReferenceData) -> str:
+    cache_key = (subexon, ensid, flag, code)
+    cached = reference.subexon_cache.get(cache_key)
+    if cached is not None:
+        return cached
     try:
         attrs = reference.dict_exon_coords[ensid][subexon]
         if code == 1 and flag == "site2":
             if attrs[1] == "+":
-                return query_from_dict_fa(int(attrs[2]) + 1, attrs[3], ensid, attrs[1], reference.dict_fa)
-            return query_from_dict_fa(attrs[2], int(attrs[3]) - 1, ensid, attrs[1], reference.dict_fa)
-        return query_from_dict_fa(attrs[2], attrs[3], ensid, attrs[1], reference.dict_fa)
+                seq = query_from_dict_fa(int(attrs[2]) + 1, attrs[3], ensid, attrs[1], reference.dict_fa)
+            else:
+                seq = query_from_dict_fa(attrs[2], int(attrs[3]) - 1, ensid, attrs[1], reference.dict_fa)
+        else:
+            seq = query_from_dict_fa(attrs[2], attrs[3], ensid, attrs[1], reference.dict_fa)
     except KeyError:
         if ":" in subexon:
             fusion_ensid, fusion_exon = subexon.split(":")
@@ -819,30 +841,44 @@ def subexon_tran(subexon: str, ensid: str, flag: str, code: int, reference: Refe
                 actual_exon = fusion_exon.split("_")[0]
                 attrs = reference.dict_exon_coords[fusion_ensid][actual_exon]
                 if attrs[1] == "+":
-                    return query_from_dict_fa(suffix, attrs[3], fusion_ensid, attrs[1], reference.dict_fa)
-                return query_from_dict_fa(attrs[2], suffix, fusion_ensid, attrs[1], reference.dict_fa)
+                    seq = query_from_dict_fa(suffix, attrs[3], fusion_ensid, attrs[1], reference.dict_fa)
+                else:
+                    seq = query_from_dict_fa(attrs[2], suffix, fusion_ensid, attrs[1], reference.dict_fa)
+                reference.subexon_cache[cache_key] = seq
+                return seq
             try:
                 attrs = reference.dict_exon_coords[fusion_ensid][fusion_exon]
             except KeyError:
-                return "*" * 10
-            return query_from_dict_fa(attrs[2], attrs[3], fusion_ensid, attrs[1], reference.dict_fa)
+                seq = "*" * 10
+            else:
+                seq = query_from_dict_fa(attrs[2], attrs[3], fusion_ensid, attrs[1], reference.dict_fa)
+            reference.subexon_cache[cache_key] = seq
+            return seq
 
         parts = subexon.split("_")
         if len(parts) == 1:
-            return "*" * 10
+            seq = "*" * 10
+            reference.subexon_cache[cache_key] = seq
+            return seq
         actual_exon, suffix = parts
         try:
             attrs = reference.dict_exon_coords[ensid][actual_exon]
         except KeyError:
             chr_utr, strand_utr = utr_attrs(ensid, reference.dict_exon_coords)
-            return utr_junction(suffix, ensid, strand_utr, chr_utr, flag, reference)
+            seq = utr_junction(suffix, ensid, strand_utr, chr_utr, flag, reference)
+            reference.subexon_cache[cache_key] = seq
+            return seq
         if flag == "site2":
             if attrs[1] == "+":
-                return query_from_dict_fa(suffix, attrs[3], ensid, attrs[1], reference.dict_fa)
-            return query_from_dict_fa(attrs[2], suffix, ensid, attrs[1], reference.dict_fa)
-        if attrs[1] == "+":
-            return query_from_dict_fa(attrs[2], suffix, ensid, attrs[1], reference.dict_fa)
-        return query_from_dict_fa(suffix, attrs[3], ensid, attrs[1], reference.dict_fa)
+                seq = query_from_dict_fa(suffix, attrs[3], ensid, attrs[1], reference.dict_fa)
+            else:
+                seq = query_from_dict_fa(attrs[2], suffix, ensid, attrs[1], reference.dict_fa)
+        elif attrs[1] == "+":
+            seq = query_from_dict_fa(attrs[2], suffix, ensid, attrs[1], reference.dict_fa)
+        else:
+            seq = query_from_dict_fa(suffix, attrs[3], ensid, attrs[1], reference.dict_fa)
+    reference.subexon_cache[cache_key] = seq
+    return seq
 
 
 def uid_to_coord(uid: str, dict_exon_coords: dict) -> str:
