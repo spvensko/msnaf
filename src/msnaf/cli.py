@@ -47,6 +47,12 @@ def build_parser():
         default=0.1,
         help="SNAF prevalence tumor fraction cutoff.",
     )
+    parser.add_argument(
+        "--species",
+        choices=["human", "mouse", "auto"],
+        default="auto",
+        help="Species for reference database selection. 'auto' detects from junction IDs. Default: %(default)s.",
+    )
     return parser
 
 
@@ -67,6 +73,7 @@ def main():
         tumor_cutoff=args.tumor_cutoff,
         normal_prevalance_cutoff=args.normal_prevalance_cutoff,
         tumor_prevalance_cutoff=args.tumor_prevalance_cutoff,
+        species=args.species,
     )
 
 

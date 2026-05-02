@@ -16,6 +16,39 @@ import pandas as pd
 from scipy.sparse import csr_matrix
 
 
+SPECIES_CONFIG = {
+    "human": {
+        "db_dir": "Alt91_db",
+        "exon_table": "Hs_Ensembl_exon_add_col.txt",
+        "transcript_db": "mRNA-ExonIDs.txt",
+        "fasta": "Hs_gene-seq-2000_flank.fa",
+        "gtf": "Homo_sapiens.GRCh38.91.gtf",
+        "start_codon": "df_start_codon.txt",
+        "gtex_db": "GTEx_junction_counts.h5ad",
+        "control_db": "tcga_matched_control_junction_count.h5ad",
+        "gene_prefix": "ENSG",
+    },
+    "mouse": {
+        "db_dir": "Mm_Alt110_db",
+        "exon_table": "Mm_Ensembl_exon_add_col.txt",
+        "transcript_db": "Mm_mRNA-ExonIDs.txt",
+        "fasta": "Mm_gene-seq-2000_flank.fa",
+        "gtf": "Mus_musculus.GRCm38.110.gtf",
+        "start_codon": "Mm_df_start_codon.txt",
+        "gtex_db": "encode_junction_counts.h5ad",
+        "control_db": "mouse_matched_control_junction_count.h5ad",
+        "gene_prefix": "ENSMUSG",
+    },
+}
+
+
+def detect_species(df: pd.DataFrame) -> str:
+    first_uid = str(df.index[0])
+    if first_uid.startswith("ENSMUSG"):
+        return "mouse"
+    return "human"
+
+
 @dataclass
 class GenomeReference:
     records: object
@@ -83,13 +116,14 @@ def load_counts_matrix(path: str, sep: str = "\t") -> pd.DataFrame:
     return df
 
 
-def load_controls(refs_dir: str, use_tcga_control: bool = True) -> dict | None:
+def load_controls(refs_dir: str, use_tcga_control: bool = True, species: str = "human") -> dict | None:
     if not use_tcga_control:
         return None
-    tcga_path = os.path.join(refs_dir, "controls", "tcga_matched_control_junction_count.h5ad")
-    if not os.path.exists(tcga_path):
+    config = SPECIES_CONFIG.get(species, SPECIES_CONFIG["human"])
+    control_path = os.path.join(refs_dir, "controls", config["control_db"])
+    if not os.path.exists(control_path):
         return None
-    return {"tcga_control": ad.read_h5ad(tcga_path, backed="r")}
+    return {"tcga_control": ad.read_h5ad(control_path, backed="r")}
 
 
 def subset_controls(add_control: dict | None, tested_junctions: set[str], filter_mode: str) -> dict | None:
@@ -138,13 +172,17 @@ def export_peptides(
     tumor_cutoff: int = 20,
     normal_prevalance_cutoff: float = 0.01,
     tumor_prevalance_cutoff: float = 0.1,
+    species: str = "auto",
 ) -> pd.DataFrame:
     log(f"loading counts matrix from {counts_path}")
     df = load_counts_matrix(counts_path)
     log(f"loaded counts matrix with {df.shape[0]} junctions across {df.shape[1]} samples")
+    if species == "auto":
+        species = detect_species(df)
+    log(f"detected species: {species}")
     log("loading additional control databases")
     add_control = subset_controls(
-        load_controls(refs_dir, use_tcga_control=use_tcga_control),
+        load_controls(refs_dir, use_tcga_control=use_tcga_control, species=species),
         set(df.index),
         filter_mode,
     )
@@ -164,6 +202,7 @@ def export_peptides(
         tumor_cutoff=tumor_cutoff,
         normal_prevalance_cutoff=normal_prevalance_cutoff,
         tumor_prevalance_cutoff=tumor_prevalance_cutoff,
+        species=species,
     )
     try:
         log(f"filtering junctions with mode={filter_mode}")
@@ -222,13 +261,15 @@ def load_reference_data(
     tumor_cutoff: int = 20,
     normal_prevalance_cutoff: float = 0.01,
     tumor_prevalance_cutoff: float = 0.1,
+    species: str = "human",
 ) -> ReferenceData:
-    exon_table = os.path.join(refs_dir, "Alt91_db", "Hs_Ensembl_exon_add_col.txt")
-    transcript_db = os.path.join(refs_dir, "Alt91_db", "mRNA-ExonIDs.txt")
-    fasta = os.path.join(refs_dir, "Alt91_db", "Hs_gene-seq-2000_flank.fa")
-    gtf = os.path.join(refs_dir, "Alt91_db", "Homo_sapiens.GRCh38.91.gtf")
-    start_codon_path = os.path.join(refs_dir, "Alt91_db", "df_start_codon.txt")
-    gtex_db = os.path.join(refs_dir, "controls", "GTEx_junction_counts.h5ad")
+    config = SPECIES_CONFIG.get(species, SPECIES_CONFIG["human"])
+    exon_table = os.path.join(refs_dir, config["db_dir"], config["exon_table"])
+    transcript_db = os.path.join(refs_dir, config["db_dir"], config["transcript_db"])
+    fasta = os.path.join(refs_dir, config["db_dir"], config["fasta"])
+    gtf = os.path.join(refs_dir, config["db_dir"], config["gtf"])
+    start_codon_path = os.path.join(refs_dir, config["db_dir"], config["start_codon"])
+    gtex_db = os.path.join(refs_dir, "controls", config["gtex_db"])
 
     log("loading exon coordinate table")
     dict_exon_coords = exon_coords_to_dict(exon_table)
@@ -456,7 +497,7 @@ def _filter_maxmin(
 def uid_is_in_db(uid: str, dict_exonlist: dict) -> bool:
     ensg = uid.split(":")[0]
     exons = ":".join(uid.split(":")[1:])
-    if "_" in exons or "U" in exons or "ENSG" in exons or "I" in exons:
+    if "_" in exons or "U" in exons or "ENSG" in exons or "ENSMUSG" in exons or "I" in exons:
         return False
     exonlist = dict_exonlist.get(ensg)
     if exonlist is None:
@@ -536,10 +577,10 @@ def translate_uid(uid: str, reference: ReferenceData, strict: bool = False, ks: 
 
 
 def detect_type(uid: str) -> str:
-    valid_pattern = re.compile(r"^ENSG\d+:.+?-.+")
+    valid_pattern = re.compile(r"^(?:ENSG|ENSMUSG)\d+:.+?-.+")
     if not re.search(valid_pattern, uid):
         return "invalid"
-    if len(re.findall("ENSG", uid)) == 2:
+    if len(re.findall(r"ENSG|ENSMUSG", uid)) == 2:
         return "trans_splicing"
     if "U" in uid:
         return "utr_event"
@@ -557,7 +598,7 @@ def detect_type(uid: str) -> str:
         return "invalid"
     if "I" in uid:
         return "intron_retention"
-    if re.search(r"^ENSG\d+:E\d+\.\d+-E\d+\.\d+$", uid):
+    if re.search(r"^(?:ENSG|ENSMUSG)\d+:E\d+\.\d+-E\d+\.\d+$", uid):
         e1, e2 = uid.split(":")[1].split("-")
         e1_int, e1_frac = int(e1.split(".")[0][1:]), int(e1.split(".")[1])
         e2_int, e2_frac = int(e2.split(".")[0][1:]), int(e2.split(".")[1])
@@ -916,7 +957,7 @@ def uid_to_coord(uid: str, dict_exon_coords: dict) -> str:
         try:
             dict_exon_coords[ensg][actual_exon]
         except KeyError:
-            if "U" in actual_exon or "ENSG" in actual_exon:
+            if "U" in actual_exon or "ENSG" in actual_exon or "ENSMUSG" in actual_exon:
                 end_coord = trailing
             else:
                 end_coord = "unknown"
@@ -926,7 +967,7 @@ def uid_to_coord(uid: str, dict_exon_coords: dict) -> str:
         try:
             attrs = dict_exon_coords[ensg][second]
         except KeyError:
-            if "ENSG" in second:
+            if "ENSG" in second or "ENSMUSG" in second:
                 ensg_second, actual_exon_second = second.split(":")
                 try:
                     attrs = dict_exon_coords[ensg_second][actual_exon_second]
