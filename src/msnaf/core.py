@@ -29,11 +29,11 @@ SPECIES_CONFIG = {
         "gene_prefix": "ENSG",
     },
     "mouse": {
-        "db_dir": "Mm_Alt110_db",
+        "db_dir": "Mm_Alt100_db",
         "exon_table": "Mm_Ensembl_exon_add_col.txt",
         "transcript_db": "Mm_mRNA-ExonIDs.txt",
         "fasta": "Mm_gene-seq-2000_flank.fa",
-        "gtf": "Mus_musculus.GRCm38.110.gtf",
+        "gtf": "Mus_musculus.GRCm38.100.gtf",
         "start_codon": "Mm_df_start_codon.txt",
         "gtex_db": "encode_junction_counts.h5ad",
         "control_db": "mouse_matched_control_junction_count.h5ad",
