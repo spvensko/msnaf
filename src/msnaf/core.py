@@ -82,8 +82,8 @@ class ReferenceData:
     dict_start_codon: dict
     phase_inferer_gtf_dict: dict
     genome: GenomeReference
-    adata: ad.AnnData
-    adata_gtex: ad.AnnData
+    adata: ad.AnnData | None
+    adata_gtex: ad.AnnData | None
     t_min: int
     n_max: int
     normal_cutoff: int
@@ -166,6 +166,7 @@ def export_peptides(
     filter_mode: str = "maxmin",
     not_in_db: bool = False,
     use_tcga_control: bool = True,
+    skip_gtex_control: bool = False,
     t_min: int = 20,
     n_max: int = 3,
     normal_cutoff: int = 5,
@@ -203,6 +204,7 @@ def export_peptides(
         normal_prevalance_cutoff=normal_prevalance_cutoff,
         tumor_prevalance_cutoff=tumor_prevalance_cutoff,
         species=species,
+        skip_gtex_control=skip_gtex_control,
     )
     try:
         log(f"filtering junctions with mode={filter_mode}")
@@ -262,6 +264,7 @@ def load_reference_data(
     normal_prevalance_cutoff: float = 0.01,
     tumor_prevalance_cutoff: float = 0.1,
     species: str = "human",
+    skip_gtex_control: bool = False,
 ) -> ReferenceData:
     config = SPECIES_CONFIG.get(species, SPECIES_CONFIG["human"])
     exon_table = os.path.join(refs_dir, config["db_dir"], config["exon_table"])
@@ -298,6 +301,7 @@ def load_reference_data(
         tumor_cutoff=tumor_cutoff,
         normal_prevalance_cutoff=normal_prevalance_cutoff,
         tumor_prevalance_cutoff=tumor_prevalance_cutoff,
+        skip_gtex=skip_gtex_control,
     )
     return ReferenceData(
         dict_exon_coords=dict_exon_coords,
@@ -327,7 +331,12 @@ def configure_controls(
     tumor_cutoff: int,
     normal_prevalance_cutoff: float,
     tumor_prevalance_cutoff: float,
-) -> tuple[ad.AnnData, ad.AnnData]:
+    skip_gtex: bool = False,
+) -> tuple[ad.AnnData | None, ad.AnnData | None]:
+    if skip_gtex or not os.path.exists(gtex_db):
+        if not skip_gtex and not os.path.exists(gtex_db):
+            log(f"WARNING: GTEx control database not found at {gtex_db}; skipping GTEx-based filtering")
+        return None, None
     tested_junctions = set(df.index)
     adata = ad.read_h5ad(gtex_db, backed="r")
     if filter_mode != "maxmin":
@@ -388,15 +397,19 @@ def _filter_prevalance(
     ) / junction_count_matrix.shape[1]
     df["prevalance_tumor"] = prevalance_tumor
 
-    prevalance_normal = np.count_nonzero(
-        (reference.adata_gtex.X > reference.normal_cutoff).toarray(), axis=1
-    ) / reference.adata_gtex.shape[1]
-    normal_dict = {uid: value for uid, value in zip(reference.adata_gtex.obs_names, prevalance_normal)}
-    df["prevalance_normal"] = df.index.map(normal_dict).fillna(value=0)
-    df["cond"] = (
-        (df["prevalance_tumor"] > reference.tumor_prevalance_cutoff)
-        & (df["prevalance_normal"] < reference.normal_prevalance_cutoff)
-    )
+    if reference.adata_gtex is not None:
+        prevalance_normal = np.count_nonzero(
+            (reference.adata_gtex.X > reference.normal_cutoff).toarray(), axis=1
+        ) / reference.adata_gtex.shape[1]
+        normal_dict = {uid: value for uid, value in zip(reference.adata_gtex.obs_names, prevalance_normal)}
+        df["prevalance_normal"] = df.index.map(normal_dict).fillna(value=0)
+        df["cond"] = (
+            (df["prevalance_tumor"] > reference.tumor_prevalance_cutoff)
+            & (df["prevalance_normal"] < reference.normal_prevalance_cutoff)
+        )
+    else:
+        df["prevalance_normal"] = 0.0
+        df["cond"] = df["prevalance_tumor"] > reference.tumor_prevalance_cutoff
     valid = df.loc[df["cond"]].index.tolist()
     if not_in_db:
         valid = [uid for uid in valid if not uid_is_in_db(uid, reference.dict_exonlist)]
@@ -449,12 +462,17 @@ def _filter_maxmin(
 ) -> tuple[list[str], list[str], pd.DataFrame, pd.DataFrame]:
     df = pd.DataFrame(index=junction_count_matrix.index, data={"max": junction_count_matrix.max(axis=1).values})
     df_to_write = [df.copy()]
-    junction_to_mean = reference.adata_gtex.obs.loc[
-        reference.adata_gtex.obs_names.isin(junction_count_matrix.index), "mean"
-    ].to_dict()
-    df["mean"] = df.index.map(junction_to_mean).fillna(value=0)
-    df["diff"] = df["max"] - df["mean"]
-    df["cond"] = (df["mean"] < reference.n_max) & (df["diff"] > reference.t_min)
+    if reference.adata_gtex is not None:
+        junction_to_mean = reference.adata_gtex.obs.loc[
+            reference.adata_gtex.obs_names.isin(junction_count_matrix.index), "mean"
+        ].to_dict()
+        df["mean"] = df.index.map(junction_to_mean).fillna(value=0)
+        df["diff"] = df["max"] - df["mean"]
+        df["cond"] = (df["mean"] < reference.n_max) & (df["diff"] > reference.t_min)
+    else:
+        df["mean"] = 0
+        df["diff"] = df["max"]
+        df["cond"] = df["diff"] > reference.t_min
     df_to_write[0] = df.copy()
     valid = df.loc[df["cond"]].index.tolist()
     if not_in_db:
@@ -481,10 +499,17 @@ def _filter_maxmin(
             df_to_write.append(tmp)
 
     invalid = list(set(junction_count_matrix.index).difference(set(valid)))
-    gtex_df = pd.concat([df["mean"]] * junction_count_matrix.shape[1], axis=1)
-    gtex_df.columns = junction_count_matrix.columns
-    diff_df = junction_count_matrix - gtex_df
-    cond_df = (gtex_df < reference.n_max) & (diff_df > reference.t_min)
+    if reference.adata_gtex is not None:
+        gtex_df = pd.concat([df["mean"]] * junction_count_matrix.shape[1], axis=1)
+        gtex_df.columns = junction_count_matrix.columns
+        diff_df = junction_count_matrix - gtex_df
+        cond_df = (gtex_df < reference.n_max) & (diff_df > reference.t_min)
+    else:
+        cond_df = pd.DataFrame(
+            True,
+            index=junction_count_matrix.index,
+            columns=junction_count_matrix.columns,
+        )
     for mean_add in mean_add_list:
         add_df = pd.concat([mean_add] * junction_count_matrix.shape[1], axis=1)
         add_df.columns = junction_count_matrix.columns

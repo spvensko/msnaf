@@ -31,6 +31,11 @@ def build_parser():
         action="store_true",
         help="Do not auto-load refs/controls/tcga_matched_control_junction_count.h5ad.",
     )
+    parser.add_argument(
+        "--skip-gtex-control",
+        action="store_true",
+        help="Skip GTEx/ENCODE normal tissue control database. If the file is missing, it is skipped automatically.",
+    )
     parser.add_argument("--t-min", type=int, default=20, help="SNAF maxmin tumor delta threshold.")
     parser.add_argument("--n-max", type=int, default=3, help="SNAF maxmin normal mean threshold.")
     parser.add_argument("--normal-cutoff", type=int, default=5, help="SNAF prevalence normal cutoff.")
@@ -67,6 +72,7 @@ def main():
         filter_mode=args.filter_mode,
         not_in_db=args.not_in_db,
         use_tcga_control=not args.skip_tcga_control,
+        skip_gtex_control=args.skip_gtex_control,
         t_min=args.t_min,
         n_max=args.n_max,
         normal_cutoff=args.normal_cutoff,
