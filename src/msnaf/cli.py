@@ -54,15 +54,49 @@ def build_parser():
     )
     parser.add_argument(
         "--species",
-        choices=["human", "mouse", "auto"],
         default="auto",
-        help="Species for reference database selection. 'auto' detects from junction IDs. Default: %(default)s.",
+        help=(
+            "Species for reference database selection. Accepts: human, mouse, auto, "
+            "or full names (e.g. 'homo sapiens', 'mus musculus') and assembly names "
+            "(e.g. 'hg38', 'mm10', 'GRCm38'). Default: auto (detects from junction IDs)."
+        ),
     )
     return parser
 
 
+SPECIES_ALIASES = {
+    "human": "human",
+    "homo sapiens": "human",
+    "homo_sapiens": "human",
+    "hs": "human",
+    "hg38": "human",
+    "grch38": "human",
+    "mouse": "mouse",
+    "mus musculus": "mouse",
+    "mus_musculus": "mouse",
+    "mm": "mouse",
+    "mm10": "mouse",
+    "mm39": "mouse",
+    "grcm38": "mouse",
+    "grcm39": "mouse",
+    "auto": "auto",
+}
+
+
+def normalize_species(raw: str) -> str:
+    key = raw.strip().lower()
+    resolved = SPECIES_ALIASES.get(key)
+    if resolved is None:
+        raise argparse.ArgumentTypeError(
+            f"unrecognized species '{raw}'. Choose from: "
+            + ", ".join(sorted(set(SPECIES_ALIASES.values())))
+        )
+    return resolved
+
+
 def main():
     args = build_parser().parse_args()
+    species = normalize_species(args.species)
     export_peptides(
         counts_path=args.counts,
         refs_dir=args.refs,
@@ -79,7 +113,7 @@ def main():
         tumor_cutoff=args.tumor_cutoff,
         normal_prevalance_cutoff=args.normal_prevalance_cutoff,
         tumor_prevalance_cutoff=args.tumor_prevalance_cutoff,
-        species=args.species,
+        species=species,
     )
 
 
