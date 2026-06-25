@@ -14,5 +14,3 @@ COPY . /opt/msnaf
 
 RUN pip install --upgrade pip setuptools wheel \
     && pip install .
-
-ENTRYPOINT ["msnaf"]
