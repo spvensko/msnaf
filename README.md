@@ -25,6 +25,8 @@ The original SNAF copyright and permission notice has been preserved. See
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for attribution and additional
 third-party licensing information.
 
+## msnaf
+
 `msnaf` takes `counts.original.full.txt`, applies the same junction-vs-control filtering logic that SNAF uses, reconstructs splice-junction sequences against the same reference bundle, and emits only:
 
 - `uid`
