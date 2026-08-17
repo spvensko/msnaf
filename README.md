@@ -4,11 +4,28 @@
   <img src="docs/msnaf-example.png" alt="mSNAF example output" width="50%">
 </p>
 
-`msnaf` is a minimal, translation-only rewrite of the SNAF execution path you described.
+## Relationship to SNAF
 
-It is fully offline. It does not query UCSC or any other remote service. You must provide a reference genome FASTA with `--genome-fasta`.
+msnaf is an AI-assisted port and derivative work of
+[SNAF](https://github.com/frankligy/SNAF), originally developed by Guangyuan
+(Frank) Li. msnaf is independently maintained and is not an official SNAF
+release.
 
-It takes `counts.original.full.txt`, applies the same junction-vs-control filtering logic that SNAF uses, reconstructs splice-junction sequences against the same reference bundle, and emits only:
+If you use msnaf in academic work, please cite the original SNAF publication:
+
+> Li G, et al. Splicing neoantigen discovery with SNAF reveals shared targets
+> for cancer immunotherapy. *Science Translational Medicine*. 2024;16:eade2886.
+> https://doi.org/10.1126/scitranslmed.ade2886
+
+## License
+
+msnaf is distributed under the [MIT License](LICENSE). It incorporates or is
+derived from portions of SNAF, which is also distributed under the MIT License.
+The original SNAF copyright and permission notice has been preserved. See
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for attribution and additional
+third-party licensing information.
+
+`msnaf` takes `counts.original.full.txt`, applies the same junction-vs-control filtering logic that SNAF uses, reconstructs splice-junction sequences against the same reference bundle, and emits only:
 
 - `uid`
 - `coord`
