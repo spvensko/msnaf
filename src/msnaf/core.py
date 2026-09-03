@@ -686,8 +686,17 @@ def iter_peptide_records(
             else:
                 pep = aa_second[:n_from_second]
                 pep_context = aa_second[: n_from_second + 10]
-            cds1 = str(Seq(de_facto_first))[len(de_facto_first) - len(pep) * 3 - n_from_first * 3 :]
-            cds2 = str(Seq(continue_second))[: len(pep) * 3 + n_from_second * 3]
+            # `continue_second` re-includes the 1-2 trailing bases of
+            # `de_facto_first` when the first exon is not a whole number of
+            # codons, and `cds1` is a suffix of `de_facto_first`, so it already
+            # ends with them. Building the window from `second` avoids
+            # duplicating those bases at the junction -- with the duplication in
+            # place the true coding sequence is not a substring of `raw_cds` and
+            # junction-spanning peptides silently get an empty CDS.
+            # Clamp the start at 0: a negative index would slice a short tail
+            # off the end of `de_facto_first` instead of taking the whole exon.
+            cds1 = str(Seq(de_facto_first))[max(0, len(de_facto_first) - len(pep) * 3 - n_from_first * 3) :]
+            cds2 = str(Seq(second))[: len(pep) * 3 + n_from_second * 3]
             raw_cds = cds1 + cds2
             actual_cds = ""
             for i in range(len(raw_cds) - (len(pep) * 3)):

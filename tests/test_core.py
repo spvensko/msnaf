@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 import numpy as np
+from Bio.Seq import Seq
 import pandas as pd
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
@@ -100,6 +101,60 @@ class CoreTests(unittest.TestCase):
         peptides = {(record["peptide"], record["coding_sequence"]) for record in records}
 
         self.assertIn(("KPG", "AAACCCGGG"), peptides)
+
+    def test_iter_peptide_records_recovers_cds_when_first_exon_is_partial_codon(self):
+        # de_facto_first is 7 nt, so one base is carried into the second exon's
+        # reading frame. A junction-spanning peptide's coding sequence must
+        # therefore cross the first/second boundary; regression guard for the
+        # duplicated-overlap bug that left coding_sequence empty here.
+        records = list(
+            iter_peptide_records(
+                de_facto_first="TGTGGTGTTATGC",
+                second="TCACGGCGTGGT",
+                ks=[3],
+                phase=0,
+                evidences=(),
+                coord="chr1:1-2(+)",
+            )
+        )
+
+        by_peptide = {record["peptide"]: record["coding_sequence"] for record in records}
+
+        self.assertIn("MLT", by_peptide)
+        self.assertTrue(by_peptide["MLT"], "cross-junction peptide has an empty coding sequence")
+        self.assertEqual(str(Seq(by_peptide["MLT"][:9]).translate()), "MLT")
+
+    def test_iter_peptide_records_cds_translates_back_across_all_frames(self):
+        # Every recovered coding sequence must translate to its own peptide, for
+        # each first-exon frame remainder (0, 1, 2).
+        first = "ATGAAACCCGGGTTTAAACCCGGGTTTAAACCCGAT"
+        second = "CATTTCCCGGGAAATTTCCCGGGAAATTTCCCGGG"
+
+        for pad in range(3):
+            de_facto_first = first + "A" * pad
+            with self.subTest(extra=len(de_facto_first) % 3):
+                records = list(
+                    iter_peptide_records(
+                        de_facto_first=de_facto_first,
+                        second=second,
+                        ks=[9, 10],
+                        phase=0,
+                        evidences=(),
+                        coord="chr1:1-2(+)",
+                    )
+                )
+
+                self.assertTrue(records)
+                for record in records:
+                    peptide = record["peptide"]
+                    cds = record["coding_sequence"]
+                    self.assertTrue(
+                        cds,
+                        "empty coding sequence for {} (extra={})".format(
+                            peptide, len(de_facto_first) % 3
+                        ),
+                    )
+                    self.assertEqual(str(Seq(cds[: len(peptide) * 3]).translate()), peptide)
 
     def test_collect_records_flattens_translation_results(self):
         reference = ReferenceData(
